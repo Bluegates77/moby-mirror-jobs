@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: 'What to copy: openneuro or vhp'
+        description: 'What to copy: openneuro, vhp or orcid'
         required: true
         default: 'openneuro'
 permissions:

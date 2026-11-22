@@ -110,10 +110,45 @@ async def vhp(session, sem):
     if SHARD == 0: open(root + '/CREDITS.txt', 'w').write('Visible Human Project (NLM), Male-Images and Female-Images, PNG_format directories, downloaded %s from https://data.lhncbc.nlm.nih.gov/public/Visible-Human/ . NLM (https://www.nlm.nih.gov/research/visible/visible_human.html): "a public-domain library of cross-sectional cryosection, CT, and MRI images obtained from one male cadaver and one female cadaver"; the data READMEs say usage is approved under the NLM Terms and Conditions (https://www.nlm.nih.gov/databases/download/terms_and_conditions.html): acknowledge "Courtesy of the U.S. National Library of Medicine"; redistributors keep the data current or say plainly it may not be. Unmodified; each file size checked against NLM\'s index. NOT copied: the 70mm and Fullcolor raw directories (duplicates of the PNG data), the radiological directory (not requested) and "Visible Human 2.0 - Peter Ratiu" (separate authorship, terms not read).\n' % T)
     print('failed files:', len(bad), flush=True)
     await asyncio.get_running_loop().run_in_executor(None, flush, root, 'Visible Human PNG files', 'datasets/visible-human')
+
+async def orcid(session, sem):
+    """ORCID Public Data File 2026, summaries only (CC0), stored in 8 GB parts: shard n copies part n using 8 parallel range connections.
+    The whole-file md5 from Figshare is checked afterwards by streaming the parts back from Hugging Face."""
+    async with session.get('https://api.figshare.com/v2/articles/34697766') as r: d = await r.json()
+    assert d['license']['name'] == 'CC0'
+    f = [x for x in d['files'] if 'summaries' in x['name']][0]; size = f['size']; PART = 8_000_000_000; n = SHARD
+    nparts = -(-size // PART)
+    if n >= nparts: print('no part for this shard', flush=True); return
+    dest = 'datasets/orcid/%s.part%02d' % (f['name'], n)
+    if not DRY and a.file_exists(R, dest, repo_type='dataset'): print('skip', dest, flush=True); return
+    lo = n * PART; hi = min(size, lo + PART) - 1; path = W + '/part'; os.makedirs(W, exist_ok=True)
+    with open(path, 'wb') as fh: fh.truncate(hi - lo + 1)
+    sub = -(-(hi - lo + 1) // 8)
+    async def piece(i):
+        a0 = lo + i * sub; b0 = min(hi, a0 + sub - 1); pos = a0
+        for t in range(8):
+            try:
+                async with sem:
+                    async with session.get(f['download_url'], headers={'Range': 'bytes=%d-%d' % (pos, b0)}) as r:
+                        if r.status not in (200, 206): raise Exception('status %d' % r.status)
+                        with open(path, 'r+b') as fh:
+                            fh.seek(pos - lo)
+                            async for c in r.content.iter_chunked(1 << 22): fh.write(c); pos += len(c)
+                if pos == b0 + 1: return
+            except Exception: await asyncio.sleep(3)
+        raise Exception('piece failed %d' % i)
+    await asyncio.gather(*[piece(i) for i in range(8) if lo + i * sub <= hi])
+    assert os.path.getsize(path) == hi - lo + 1
+    info = dict(part=n, file=f['name'], range='%d-%d' % (lo, hi), size=hi - lo + 1, sha256=sha(path), whole_file_md5_from_figshare=f['computed_md5'], date=T)
+    json.dump(info, open(W + '/part.json', 'w'))
+    if DRY: print('DRY would upload', dest, info, flush=True); return
+    a.upload_file(path_or_fileobj=path, path_in_repo=dest, repo_id=R, repo_type='dataset', commit_message='ORCID 2026 summaries part %d (shard %d)' % (n, SHARD))
+    a.upload_file(path_or_fileobj=W + '/part.json', path_in_repo='datasets/orcid/_parts/part_%02d.json' % n, repo_id=R, repo_type='dataset', commit_message='ORCID part %d index' % n)
+    print('uploaded part', n, flush=True)
 async def main():
     shutil.rmtree(W, ignore_errors=True); os.makedirs(W)
     conn = aiohttp.TCPConnector(limit=CONC, limit_per_host=CONC, ttl_dns_cache=300); sem = asyncio.Semaphore(CONC)
     async with aiohttp.ClientSession(connector=conn, timeout=aiohttp.ClientTimeout(total=300), headers={'User-Agent': 'moby-hf-copy'}, trust_env=True) as session:
-        await (openneuro if JOB == 'openneuro' else vhp)(session, sem)
+        await {'openneuro': openneuro, 'vhp': vhp, 'orcid': orcid}[JOB](session, sem)
     print('SHARD DONE', JOB, SHARD, flush=True)
 asyncio.run(main())
