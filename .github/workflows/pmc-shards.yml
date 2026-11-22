@@ -3,10 +3,6 @@ name: PMC open-access mirror (20 shards)
 # Public data only. Started by hand (Actions tab > Run workflow). The write token is the repository secret HF_TOKEN; it is never printed or stored in this repository.
 on:
   workflow_dispatch:
-    inputs:
-      flush_chunks:
-        description: 'Chunks per Hugging Face commit (keep at 3 or more, because the Hub allows 128 commits per hour per repo)'
-        default: '3'
 permissions:
   contents: read
 jobs:
@@ -23,11 +19,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -q huggingface_hub requests
+      - run: pip install -q huggingface_hub aiohttp
       - name: Copy this shard
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
-          FLUSH_CHUNKS: ${{ inputs.flush_chunks || '3' }}
+          TARGET_PER_HOUR: '112'
+          CONC: '256'
         run: python scripts/pmc_shard.py
