@@ -79,7 +79,9 @@ async def main():
     shutil.rmtree(ROOT, ignore_errors=True)
     conn = aiohttp.TCPConnector(limit=CONC, limit_per_host=CONC, ttl_dns_cache=300)
     sem = asyncio.Semaphore(CONC)
-    pending = []; n = 0; d = ROOT + '/stage0'; os.makedirs(d); last_flush = 0.0; up = None; updir = None
+    pending = []; n = 0; d = ROOT + '/stage0'; os.makedirs(d); up = None; updir = None
+    # stagger: shard k may first commit k/SHARDS of one gap after the start, so the commits are spread evenly over time
+    last_flush = time.time() - MIN_GAP + MIN_GAP * SHARD / SHARDS
     async with aiohttp.ClientSession(connector=conn, timeout=aiohttp.ClientTimeout(total=120), headers={'User-Agent': 'moby-hf-copy'}, trust_env=True) as session:
         mine = [ci for ci in range(nchunks) if ci % SHARDS == SHARD]
         for idx, ci in enumerate(mine):
