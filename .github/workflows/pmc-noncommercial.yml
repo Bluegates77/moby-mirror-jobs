@@ -26,7 +26,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
-          TARGET_PER_HOUR: '60'
+          TARGET_PER_HOUR: '40'
           CONC: '256'
           DEST: datasets/pmc-oa-noncommercial-use
           KEYS_FROM: datasets/pmc-oa-commercial-use
