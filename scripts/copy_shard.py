@@ -51,7 +51,7 @@ async def openneuro(session, sem):
     stage = W + '/stage'; staged = 0; pend = []; last = time.time() - MIN_GAP + MIN_GAP * SHARD / SHARDS; up = None; os.makedirs(stage, exist_ok=True)
     for s in mine:
         ds = s['id']
-        if not DRY and a.file_exists(R, 'datasets/openneuro/%s.tar' % ds, repo_type='dataset'): print('skip', ds, flush=True); continue
+        if not DRY and (a.file_exists(R, 'datasets/openneuro/openneuro/%s.tar' % ds, repo_type='dataset') or a.file_exists(R, 'datasets/openneuro/%s.tar' % ds, repo_type='dataset')): print('skip', ds, flush=True); continue
         keys = []; tok = None
         while True:
             u = S3 + '?list-type=2&prefix=%s/' % ds + ('&continuation-token=' + urllib.parse.quote(tok) if tok else '')
