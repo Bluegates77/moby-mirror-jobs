@@ -8,6 +8,10 @@ on:
         description: 'What to copy: openneuro, vhp or orcid'
         required: true
         default: 'openneuro'
+      redo:
+        description: 'openneuro only: comma list of dataset ids to copy again and overwrite'
+        required: false
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -29,6 +33,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           JOB: ${{ inputs.job }}
+          REDO: ${{ inputs.redo }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
           TARGET_PER_HOUR: '100000'

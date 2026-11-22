@@ -45,13 +45,14 @@ def flush_rm(d, label, dest):
     flush(d, label, dest); shutil.rmtree(d, ignore_errors=True)
 async def openneuro(session, sem):
     sel = json.load(open(hf_hub_download(R, 'datasets/openneuro/selection.json', repo_type='dataset')))
-    mine = [s for i, s in enumerate(sel) if i % SHARDS == SHARD and (not ONLY or s['id'] == ONLY)]
+    REDO = [x for x in os.environ.get('REDO', '').split(',') if x]   # datasets to copy again and overwrite (their first copy lost files to the old 300 s limit)
+    mine = [s for i, s in enumerate(sel) if i % SHARDS == SHARD and (not ONLY or s['id'] == ONLY) and (not REDO or s['id'] in REDO)]
     print('openneuro datasets for this shard:', len(mine), flush=True)
     S3 = 'https://s3.amazonaws.com/openneuro.org/'; loop = asyncio.get_running_loop()
     stage = W + '/stage'; staged = 0; pend = []; last = time.time() - MIN_GAP + MIN_GAP * SHARD / SHARDS; up = None; os.makedirs(stage, exist_ok=True)
     for s in mine:
         ds = s['id']
-        if not DRY and (a.file_exists(R, 'datasets/openneuro/openneuro/%s.tar' % ds, repo_type='dataset') or a.file_exists(R, 'datasets/openneuro/%s.tar' % ds, repo_type='dataset')): print('skip', ds, flush=True); continue
+        if not DRY and not REDO and (a.file_exists(R, 'datasets/openneuro/openneuro/%s.tar' % ds, repo_type='dataset') or a.file_exists(R, 'datasets/openneuro/%s.tar' % ds, repo_type='dataset')): print('skip', ds, flush=True); continue
         keys = []; tok = None
         while True:
             u = S3 + '?list-type=2&prefix=%s/' % ds + ('&continuation-token=' + urllib.parse.quote(tok) if tok else '')
