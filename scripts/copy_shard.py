@@ -148,7 +148,7 @@ async def orcid(session, sem):
 async def main():
     shutil.rmtree(W, ignore_errors=True); os.makedirs(W)
     conn = aiohttp.TCPConnector(limit=CONC, limit_per_host=CONC, ttl_dns_cache=300); sem = asyncio.Semaphore(CONC)
-    async with aiohttp.ClientSession(connector=conn, timeout=aiohttp.ClientTimeout(total=300), headers={'User-Agent': 'moby-hf-copy'}, trust_env=True) as session:
+    async with aiohttp.ClientSession(connector=conn, timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120), headers={'User-Agent': 'moby-hf-copy'}, trust_env=True) as session:
         await {'openneuro': openneuro, 'vhp': vhp, 'orcid': orcid}[JOB](session, sem)
     print('SHARD DONE', JOB, SHARD, flush=True)
 asyncio.run(main())
