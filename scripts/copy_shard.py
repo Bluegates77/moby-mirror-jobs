@@ -41,12 +41,14 @@ def flush(d, label, dest):
         try: a.upload_folder(repo_id=R, repo_type='dataset', folder_path=d, path_in_repo=dest, commit_message='%s (shard %d)' % (label, SHARD)); print('uploaded', label, flush=True); return
         except Exception as e: print('upload retry', str(e)[:100], flush=True); time.sleep(60)
     raise SystemExit('upload failed')
+def flush_rm(d, label, dest):
+    flush(d, label, dest); shutil.rmtree(d, ignore_errors=True)
 async def openneuro(session, sem):
     sel = json.load(open(hf_hub_download(R, 'datasets/openneuro/selection.json', repo_type='dataset')))
     mine = [s for i, s in enumerate(sel) if i % SHARDS == SHARD and (not ONLY or s['id'] == ONLY)]
     print('openneuro datasets for this shard:', len(mine), flush=True)
     S3 = 'https://s3.amazonaws.com/openneuro.org/'; loop = asyncio.get_running_loop()
-    stage = W + '/stage'; pend = []; last = time.time() - MIN_GAP + MIN_GAP * SHARD / SHARDS; up = None; os.makedirs(stage, exist_ok=True)
+    stage = W + '/stage'; staged = 0; pend = []; last = time.time() - MIN_GAP + MIN_GAP * SHARD / SHARDS; up = None; os.makedirs(stage, exist_ok=True)
     for s in mine:
         ds = s['id']
         if not DRY and a.file_exists(R, 'datasets/openneuro/%s.tar' % ds, repo_type='dataset'): print('skip', ds, flush=True); continue
@@ -58,6 +60,11 @@ async def openneuro(session, sem):
             tk = re.search(r'<NextContinuationToken>(.*?)</NextContinuationToken>', t)
             if not tk: break
             tok = html.unescape(tk.group(1))
+        total = sum(k[2] for k in keys)
+        if total > 8e9:   # bigger than a runner can stage: record and skip (the S3 copy is larger than OpenNeuro's snapshot size)
+            os.makedirs(stage + '/index', exist_ok=True)
+            json.dump(dict(id=ds, name=s['name'], licence=s['licence'], files=len(keys), bytes=total, skipped_whole_dataset='larger than 8 GB, not copied', date=T), open(stage + '/index/%s.json' % ds, 'w'))
+            pend.append(ds); print('dataset', ds, 'skipped (too big)', total, flush=True); continue
         tmp = W + '/tmp_' + ds; shutil.rmtree(tmp, ignore_errors=True); skipped = []
         async def one(k):
             key, etag, size = k; p = tmp + '/' + key
@@ -78,10 +85,11 @@ async def openneuro(session, sem):
         info = dict(id=ds, name=s['name'], licence=s['licence'], files=len(keys), bytes=sum(k[2] for k in keys), md5_checked=sum(1 for r in res if r), skipped=skipped, archive_size=os.path.getsize(tp), archive_sha256=sha(tp), path='datasets/openneuro/%s.tar' % ds, date=T)
         os.makedirs(stage + '/index', exist_ok=True); json.dump(info, open(stage + '/index/%s.json' % ds, 'w'))
         pend.append(ds); print('dataset', ds, info['files'], 'files', info['bytes'], 'bytes, skipped', len(skipped), flush=True)
-        if time.time() - last >= MIN_GAP:
+        staged += info['archive_size']
+        if time.time() - last >= MIN_GAP or staged >= 5e9:
             if up is not None: await up
-            d = stage; up = loop.run_in_executor(None, flush, d, 'OpenNeuro CC0 datasets ' + ','.join(pend), 'datasets/openneuro'); last = time.time(); pend = []
-            stage = W + '/stage%d' % int(time.time()); os.makedirs(stage, exist_ok=True)
+            d = stage; up = loop.run_in_executor(None, flush_rm, d, 'OpenNeuro CC0 datasets ' + ','.join(pend), 'datasets/openneuro'); last = time.time(); pend = []
+            stage = W + '/stage%d' % int(time.time()); os.makedirs(stage, exist_ok=True); staged = 0
     if up is not None: await up
     if pend:
         wait = MIN_GAP - (time.time() - last)
