@@ -31,6 +31,6 @@ jobs:
           JOB: ${{ inputs.job }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
-          TARGET_PER_HOUR: '60'
+          TARGET_PER_HOUR: '100000'
           CONC: '128'
         run: python scripts/copy_shard.py
