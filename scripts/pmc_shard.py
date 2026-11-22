@@ -11,10 +11,10 @@ from huggingface_hub import HfApi, hf_hub_download
 SHARD = int(os.environ['SHARD']); SHARDS = int(os.environ['SHARDS']); CONC = int(os.environ.get('CONC', '256'))
 TARGET = float(os.environ.get('TARGET_PER_HOUR', '112')); MIN_GAP = SHARDS * 3600.0 / TARGET
 DRY = os.environ.get('DRY') == '1'
-R = 'Middle-child/moby-public-assets'; DEST = 'datasets/pmc-oa-commercial-use'; B = 'https://pmc-oa-opendata.s3.amazonaws.com/'; CH = int(os.environ.get('CH', '40000'))
-OK = {'CC0', 'CC BY', 'CC BY-SA', 'CC BY-ND'}
+R = 'Middle-child/moby-public-assets'; DEST = os.environ.get('DEST', 'datasets/pmc-oa-commercial-use'); KEYS_FROM = os.environ.get('KEYS_FROM', 'datasets/pmc-oa-commercial-use'); B = 'https://pmc-oa-opendata.s3.amazonaws.com/'; CH = int(os.environ.get('CH', '40000'))
+OK = set(x.strip() for x in os.environ.get('OKLIC', 'CC0,CC BY,CC BY-SA,CC BY-ND').split(','))   # default: the commercial-use licences; the non-commercial run sets OKLIC
 a = HfApi(); T = str(datetime.date.today()); ROOT = os.environ.get('RUNNER_TEMP', '/tmp') + '/pmc%d' % SHARD
-kp = hf_hub_download(R, DEST + '/inventory/pmc_keys.txt.gz', repo_type='dataset')
+kp = hf_hub_download(R, KEYS_FROM + '/inventory/pmc_keys.txt.gz', repo_type='dataset')
 keys = gzip.open(kp, 'rt').read().split('\n'); nchunks = -(-len(keys) // CH)
 print('keys', len(keys), 'chunks', nchunks, 'shard', SHARD, '/', SHARDS, 'min gap between commits %.0fs' % MIN_GAP, flush=True)
 async def aget(session, sem, url, tries=6):

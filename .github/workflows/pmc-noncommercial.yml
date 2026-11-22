@@ -1,0 +1,34 @@
+name: PMC open-access NON-COMMERCIAL subset (20 shards, aiohttp)
+# Copies the PMC Open Access articles licensed CC BY-NC, CC BY-NC-SA and CC BY-NC-ND into a separate folder of the public Hugging Face dataset repo.
+# These licences allow copying for NON-COMMERCIAL use only. The folder is kept apart so it can be removed if the site ever charges or sells anything.
+# Started by hand. The write token is the repository secret HF_TOKEN; it is never printed or stored here.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub aiohttp
+      - name: Copy this shard
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: '20'
+          TARGET_PER_HOUR: '60'
+          CONC: '256'
+          DEST: datasets/pmc-oa-noncommercial-use
+          KEYS_FROM: datasets/pmc-oa-commercial-use
+          OKLIC: 'CC BY-NC,CC BY-NC-SA,CC BY-NC-ND'
+        run: python scripts/pmc_shard.py
