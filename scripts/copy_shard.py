@@ -56,7 +56,9 @@ async def openneuro(session, sem):
         while True:
             u = S3 + '?list-type=2&prefix=%s/' % ds + ('&continuation-token=' + urllib.parse.quote(tok) if tok else '')
             t = await text(session, sem, u)
-            for m in re.finditer(r'<Contents><Key>(.*?)</Key>.*?<ETag>&quot;(.*?)&quot;</ETag><Size>(\d+)</Size>', t, re.S): keys.append((html.unescape(m.group(1)), m.group(2), int(m.group(3))))
+            for blk in re.findall(r'<Contents>(.*?)</Contents>', t, re.S):   # one entry at a time: newer objects carry checksum fields between ETag and Size, which made the old single pattern scan the whole page (CPU spin, stalled shards)
+                k = re.search(r'<Key>(.*?)</Key>', blk, re.S); e = re.search(r'<ETag>&quot;(.*?)&quot;</ETag>', blk); z = re.search(r'<Size>(\d+)</Size>', blk)
+                if k and e and z: keys.append((html.unescape(k.group(1)), e.group(1), int(z.group(1))))
             tk = re.search(r'<NextContinuationToken>(.*?)</NextContinuationToken>', t)
             if not tk: break
             tok = html.unescape(tk.group(1))
