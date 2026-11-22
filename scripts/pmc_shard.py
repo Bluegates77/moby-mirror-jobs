@@ -37,7 +37,7 @@ async def process(session, sem, ci, d):
     ks = keys[ci * CH:(ci + 1) * CH]
     async def meta(k):
         b = await aget(session, sem, B + 'metadata/' + k + '.json'); return json.loads(b) if b else None
-    ms = []
+    skipped = []; ms = []
     for i in range(0, len(ks), 5000): ms += await asyncio.gather(*[meta(k) for k in ks[i:i + 5000]])
     lic = collections.Counter(); sel = []
     for k, m in zip(ks, ms):
@@ -47,23 +47,28 @@ async def process(session, sem, ci, d):
     os.makedirs(d + '/xml', exist_ok=True); os.makedirs(d + '/metadata', exist_ok=True)
     async def xml(km):
         k, m = km; want = re.search(r'md5=([0-9a-f]{32})', m['xml_url']).group(1)
+        reason = 'missing (404)'
         for t in range(4):
             b = await aget(session, sem, B + k + '/' + k + '.xml')
-            if b is not None and hashlib.md5(b).hexdigest() == want: return k, m, b
-        raise Exception('xml md5 mismatch ' + k)
+            if b is None: reason = 'missing (404)'; break
+            if hashlib.md5(b).hexdigest() == want: return k, m, b
+            reason = 'md5 mismatch'
+        skipped.append(dict(key=k, reason=reason)); return None
     tarp = d + '/xml/chunk_%04d.tar.gz' % ci; rows = []; nbytes = 0; loop = asyncio.get_running_loop(); wt = None
     with tarfile.open(tarp, 'w:gz', compresslevel=3) as tf:
-        for i in range(0, len(sel), 2000):
-            batch = await asyncio.gather(*[xml(x) for x in sel[i:i + 2000]])
+        try:
+            for i in range(0, len(sel), 2000):
+                batch = [x for x in await asyncio.gather(*[xml(x) for x in sel[i:i + 2000]]) if x is not None]
+                if wt is not None: nbytes += await wt
+                wt = loop.run_in_executor(None, write_batch, tf, batch, rows, ci)
+        finally:
             if wt is not None: nbytes += await wt
-            wt = loop.run_in_executor(None, write_batch, tf, batch, rows, ci)
-        if wt is not None: nbytes += await wt
     with gzip.open(d + '/metadata/chunk_%04d.jsonl.gz' % ci, 'wt') as f:
         for r in rows: f.write(json.dumps(r) + '\n')
     sh = hashlib.sha256()
     with open(tarp, 'rb') as f:
         for c in iter(lambda: f.read(1 << 24), b''): sh.update(c)
-    info = dict(chunk=ci, first=ks[0], last=ks[-1], seen=len(ks), copied=len(rows), xml_bytes=nbytes, archive_size=os.path.getsize(tarp), archive_sha256=sh.hexdigest(), licences=dict(lic), date=T)
+    info = dict(chunk=ci, first=ks[0], last=ks[-1], seen=len(ks), copied=len(rows), xml_bytes=nbytes, archive_size=os.path.getsize(tarp), archive_sha256=sh.hexdigest(), licences=dict(lic), skipped=skipped, date=T)
     with open(d + '/metadata/chunk_%04d.summary.json' % ci, 'w') as f: json.dump(info, f)
     return info
 def flush(d, cis):
