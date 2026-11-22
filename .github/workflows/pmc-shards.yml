@@ -1,0 +1,33 @@
+name: PMC open-access mirror (20 shards)
+# Copies the commercial-use subset of the PubMed Central Open Access dataset into a public Hugging Face dataset repo.
+# Public data only. Started by hand (Actions tab > Run workflow). The write token is the repository secret HF_TOKEN; it is never printed or stored in this repository.
+on:
+  workflow_dispatch:
+    inputs:
+      flush_chunks:
+        description: 'Chunks per Hugging Face commit (keep at 3 or more, because the Hub allows 128 commits per hour per repo)'
+        default: '3'
+permissions:
+  contents: read
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub requests
+      - name: Copy this shard
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: '20'
+          FLUSH_CHUNKS: ${{ inputs.flush_chunks || '3' }}
+        run: python scripts/pmc_shard.py
