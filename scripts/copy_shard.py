@@ -2,7 +2,7 @@
 Token only from the HF_TOKEN secret. SHARD/SHARDS split the work; a commit cap spreads each shard's commits (TARGET_PER_HOUR in total).
 openneuro: CC0 MRI datasets (selection list on Hugging Face), one uncompressed tar per dataset, files checked by size and (single-part ETag) md5.
 vhp: NLM Visible Human Project, PNG_format directories of Male-Images and Female-Images (file list on Hugging Face), files checked by size."""
-import os, re, json, html, hashlib, time, tarfile, shutil, datetime, asyncio, urllib.parse
+import os, re, json, html, hashlib, time, tarfile, shutil, datetime, asyncio, urllib.parse, collections
 import aiohttp
 from huggingface_hub import HfApi, hf_hub_download
 JOB = os.environ['JOB']; SHARD = int(os.environ['SHARD']); SHARDS = int(os.environ['SHARDS']); CONC = int(os.environ.get('CONC', '128'))
@@ -98,6 +98,92 @@ async def openneuro(session, sem):
         wait = MIN_GAP - (time.time() - last)
         if wait > 0 and not DRY: await asyncio.sleep(wait)
         await loop.run_in_executor(None, flush, stage, 'OpenNeuro CC0 datasets ' + ','.join(pend), 'datasets/openneuro')
+
+def bk_class_of_text(urls, texts):
+    """Licence class of one NXML file from its licence elements and copyright statements (None when it has none)."""
+    low = ' '.join(list(urls) + list(texts)).lower()
+    if not low.strip(): return None
+    nc = ('by-nc' in low) or ('noncommercial' in low) or ('non-commercial' in low) or ('non commercial' in low)
+    sa = ('by-sa' in low) or ('sharealike' in low) or ('share-alike' in low) or ('share alike' in low)
+    cc = ('creativecommons.org' in low) or ('creative commons' in low) or ('attribution license' in low) or ('cc by' in low) or ('cc0' in low)
+    pd = ('public domain' in low or 'publicdomain' in low) and 'rights reserved' not in low
+    if nc: return 'non-commercial'
+    if sa: return 'share-alike'
+    if cc or pd: return 'commercial-use' if cc else 'public-domain'
+    return 'unclear'
+BK_ORDER = ['public-domain', 'commercial-use', 'share-alike', 'non-commercial', 'unclear']   # least to most restrictive
+def bk_scan(tp):
+    """Read every NXML in a Bookshelf tarball; return (class, evidence, nxml count). Statements apply to all files of the book; the most restrictive chapter decides."""
+    per = collections.Counter(); ev = collections.Counter(); n = 0
+    with tarfile.open(tp, 'r:gz') as tf:
+        for m in tf:
+            if not (m.isfile() and m.name.endswith('.nxml')): continue
+            n += 1
+            if m.size > 30_000_000: continue
+            x = tf.extractfile(m).read().decode('utf8', 'ignore')
+            urls = set(); texts = []
+            for blk in re.findall(r'<license\b.*?</license>|<ali:license_ref[^>]*>[^<]*</ali:license_ref>', x, re.S):
+                for h in re.findall(r'(?:xlink:href|license-type)="([^"]*)"', blk): urls.add(h)
+                t = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', blk)).strip()
+                if t: texts.append(t[:400])
+            for cs in re.findall(r'<copyright-statement>(.*?)</copyright-statement>', x, re.S):
+                t = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', cs)).strip()
+                if t: texts.append(t[:400])
+            c = bk_class_of_text(urls, texts)
+            if c: per[c] += 1; ev[' | '.join(sorted(urls))[:200] + ' || ' + (texts[0] if texts else '')[:200]] += 1
+    if not per: return 'public-domain-no-statement', [], n
+    worst = max(per, key=lambda c: BK_ORDER.index(c))
+    return worst, [k for k, v in ev.most_common(4)], n
+async def bookshelf(session, sem):
+    """NCBI Bookshelf open-access books (pub/litarch tarballs): read each book's own licence statements, sort the tarball into a folder by licence class, copy all but the unclear ones."""
+    import csv, io
+    BASE = 'https://ftp.ncbi.nlm.nih.gov/pub/litarch/'
+    async with session.get(BASE + 'file_list.csv') as resp: raw = (await resp.read()).decode('utf-8', 'replace')   # the list is not valid UTF-8 (a stray 0xAE)
+    rows = list(csv.DictReader(io.StringIO(raw)))
+    mine = [r for i, r in enumerate(rows) if i % SHARDS == SHARD and (not ONLY or r['Accession ID'] == ONLY)]
+    print('bookshelf books for this shard:', len(mine), flush=True)
+    have = set() if DRY else {f.split('/')[-1][:-5] for f in a.list_repo_files(R, repo_type='dataset') if f.startswith('datasets/bookshelf-oa/index/')}
+    loop = asyncio.get_running_loop(); stage = W + '/stage'; staged = 0; pend = []; last = time.time() - MIN_GAP + MIN_GAP * SHARD / SHARDS; up = None
+    os.makedirs(stage, exist_ok=True); tmpd = W + '/bk'; os.makedirs(tmpd, exist_ok=True)
+    for r in mine:
+        nbk = r['Accession ID']
+        if nbk in have: continue
+        url = BASE + r['File']; name = os.path.basename(r['File']); tp = tmpd + '/' + name; size = None
+        for i in range(5):
+            try:
+                async with sem:
+                    async with session.get(url) as resp:
+                        if resp.status != 200: raise Exception('status %d' % resp.status)
+                        size = int(resp.headers.get('Content-Length', 0))
+                        if size > 9e9: break
+                        with open(tp, 'wb') as f:
+                            async for c in resp.content.iter_chunked(1 << 20): f.write(c)
+                if os.path.getsize(tp) == size: break
+                size = None
+            except Exception as e: size = None
+            await asyncio.sleep(min(2 + i * 3, 15))
+        info = dict(accession=nbk, title=r['Title'], publisher=r['Publisher'], year=r['Publication Year'], file=r['File'], last_updated=r['Last Updated (YYYY-MM-DD HH:MM:SS)'], date=T)
+        if size is None or size == 0: info.update(licence_class='download-failed', copied=False)
+        elif size > 9e9: info.update(licence_class='not-scanned-too-big', bytes=size, copied=False)
+        else:
+            try: cls, ev, nx = await loop.run_in_executor(None, bk_scan, tp)
+            except Exception as e: cls, ev, nx = 'scan-failed', [str(e)[:150]], 0
+            info.update(licence_class=cls, evidence=ev, nxml_files=nx, bytes=size, copied=cls in ('public-domain', 'public-domain-no-statement', 'commercial-use', 'share-alike', 'non-commercial'))
+            if info['copied']:
+                dst = stage + '/' + cls + '/' + name; os.makedirs(os.path.dirname(dst), exist_ok=True); shutil.move(tp, dst)
+                info.update(sha256=sha(dst), path='datasets/bookshelf-oa/%s/%s' % (cls, name)); staged += size
+        if os.path.exists(tp): os.remove(tp)
+        os.makedirs(stage + '/index', exist_ok=True); json.dump(info, open(stage + '/index/%s.json' % nbk, 'w'))
+        pend.append(nbk); print('book', nbk, info.get('licence_class'), size, flush=True)
+        if time.time() - last >= MIN_GAP or staged >= 5e9:
+            if up is not None: await up
+            d = stage; up = loop.run_in_executor(None, flush_rm, d, 'Bookshelf open-access books %d (%s ...)' % (len(pend), pend[0]), 'datasets/bookshelf-oa'); last = time.time(); pend = []
+            stage = W + '/stage%d' % int(time.time()); os.makedirs(stage, exist_ok=True); staged = 0
+    if up is not None: await up
+    if pend:
+        wait = MIN_GAP - (time.time() - last)
+        if wait > 0 and not DRY: await asyncio.sleep(wait)
+        await loop.run_in_executor(None, flush, stage, 'Bookshelf open-access books %d (%s ...)' % (len(pend), pend[0]), 'datasets/bookshelf-oa')
 async def vhp(session, sem):
     files = json.load(open(hf_hub_download(R, 'datasets/visible-human/_filelist.json', repo_type='dataset')))
     VH = 'https://data.lhncbc.nlm.nih.gov/public/Visible-Human/'
@@ -152,6 +238,6 @@ async def main():
     shutil.rmtree(W, ignore_errors=True); os.makedirs(W)
     conn = aiohttp.TCPConnector(limit=CONC, limit_per_host=CONC, ttl_dns_cache=300); sem = asyncio.Semaphore(CONC)
     async with aiohttp.ClientSession(connector=conn, timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120), headers={'User-Agent': 'moby-hf-copy'}, trust_env=True) as session:
-        await {'openneuro': openneuro, 'vhp': vhp, 'orcid': orcid}[JOB](session, sem)
+        await {'openneuro': openneuro, 'vhp': vhp, 'orcid': orcid, 'bookshelf': bookshelf}[JOB](session, sem)
     print('SHARD DONE', JOB, SHARD, flush=True)
 asyncio.run(main())

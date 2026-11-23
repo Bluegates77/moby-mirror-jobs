@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: 'What to copy: openneuro, vhp or orcid'
+        description: 'What to copy: openneuro, vhp, orcid or bookshelf'
         required: true
         default: 'openneuro'
       redo:
@@ -36,6 +36,6 @@ jobs:
           REDO: ${{ inputs.redo }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
-          TARGET_PER_HOUR: '100000'
+          TARGET_PER_HOUR: ${{ inputs.job == 'bookshelf' && '100' || '100000' }}
           CONC: '128'
         run: python scripts/copy_shard.py
