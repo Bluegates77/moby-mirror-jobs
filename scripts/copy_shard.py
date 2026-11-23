@@ -184,6 +184,26 @@ async def bookshelf(session, sem):
         wait = MIN_GAP - (time.time() - last)
         if wait > 0 and not DRY: await asyncio.sleep(wait)
         await loop.run_in_executor(None, flush, stage, 'Bookshelf open-access books %d (%s ...)' % (len(pend), pend[0]), 'datasets/bookshelf-oa')
+async def nihcxr(session, sem):
+    """NIH ChestX-ray14 (112,120 frontal chest X-rays, 1024 px PNG, 14 labelled findings plus 984 boxes), from the public mirror alkzar90/NIH-Chest-X-ray-dataset (the NIH Box site needs a browser). One zip per shard (shards 0 to 11); shard 12 takes the label files and the credits. Each file's SHA-256 is compared with the one the Hub stores for the mirror's copy."""
+    SRC = 'alkzar90/NIH-Chest-X-ray-dataset'; info = a.dataset_info(SRC, files_metadata=True); sib = {x.rfilename: x for x in info.siblings}
+    zips = sorted(k for k in sib if k.startswith('data/images/images_') and k.endswith('.zip'))
+    small = ['data/BBox_List_2017.csv', 'data/Data_Entry_2017_v2020.csv', 'data/test_list.txt', 'data/train_val_list.txt', 'data/nih-chest-xray14-portraint.png']
+    mine = [zips[SHARD]] if SHARD < len(zips) else (small if SHARD == len(zips) else [])
+    print('nihcxr files for this shard:', mine, flush=True)
+    if not mine: return
+    out = W + '/out'; os.makedirs(out, exist_ok=True); rep = []
+    for f in mine:
+        dest = 'datasets/nih-chestxray14/' + f[len('data/'):]
+        if not DRY and a.file_exists(R, dest, repo_type='dataset'): print('skip', dest, flush=True); continue
+        p = hf_hub_download(SRC, f, repo_type='dataset', local_dir=W + '/dl')
+        want = sib[f].lfs.sha256 if sib[f].lfs else None; got = sha(p)
+        assert os.path.getsize(p) == sib[f].size and (want is None or got == want), 'checksum mismatch ' + f
+        os.makedirs(os.path.dirname(out + '/' + f[len('data/'):]) or out, exist_ok=True); shutil.move(p, out + '/' + f[len('data/'):]); rep.append(dict(path=dest, size=sib[f].size, sha256=got, source_sha256=want))
+    if SHARD == len(zips):
+        open(out + '/CREDITS.txt', 'w').write("NIH Chest X-ray Dataset (ChestX-ray14): 112,120 frontal-view chest X-ray images of 30,805 patients, PNG 1024 x 1024 (downsampled from DICOM by the NIH), with 14 disease labels mined from the radiology reports (not radiologist-verified) and 984 radiologist bounding boxes for 8 findings (BBox_List_2017.csv). Provided by the NIH Clinical Center. Original site: https://nihcc.app.box.com/v/ChestXray-NIHCC . Paper: Wang X et al., ChestX-ray8, CVPR 2017.\nLICENCE as stated in the NIH's own README, reproduced in the dataset card of the Hugging Face mirror alkzar90/NIH-Chest-X-ray-dataset we copied from: \"There are no restrictions on the use of the NIH chest x-ray images. However, the dataset has the following attribution requirements: provide a link to the NIH download site (https://nihcc.app.box.com/v/ChestXray-NIHCC); include a citation to the CVPR 2017 paper; acknowledge that the NIH Clinical Center is the data provider.\" (The mirror's own licence field says 'unknown'; I could not open the NIH Box page, which needs a browser, so the NIH wording is read from the mirror's quotation, not from Box.) Commercial use is therefore allowed with attribution, to be confirmed against the Box page.\nCopied 2026-11-23, files unmodified (zips as published; extract with any unzip tool). Each file's SHA-256 matched the one the Hub stores for the mirror's copy.\n")
+    json.dump(rep, open(out + '/_report_shard%02d.json' % SHARD, 'w'))
+    flush(out, 'NIH ChestX-ray14 files ' + ','.join(os.path.basename(f) for f in mine), 'datasets/nih-chestxray14')
 async def vhp(session, sem):
     files = json.load(open(hf_hub_download(R, 'datasets/visible-human/_filelist.json', repo_type='dataset')))
     VH = 'https://data.lhncbc.nlm.nih.gov/public/Visible-Human/'
@@ -238,6 +258,6 @@ async def main():
     shutil.rmtree(W, ignore_errors=True); os.makedirs(W)
     conn = aiohttp.TCPConnector(limit=CONC, limit_per_host=CONC, ttl_dns_cache=300); sem = asyncio.Semaphore(CONC)
     async with aiohttp.ClientSession(connector=conn, timeout=aiohttp.ClientTimeout(total=None, sock_connect=30, sock_read=120), headers={'User-Agent': 'moby-hf-copy'}, trust_env=True) as session:
-        await {'openneuro': openneuro, 'vhp': vhp, 'orcid': orcid, 'bookshelf': bookshelf}[JOB](session, sem)
+        await {'openneuro': openneuro, 'vhp': vhp, 'orcid': orcid, 'bookshelf': bookshelf, 'nihcxr': nihcxr}[JOB](session, sem)
     print('SHARD DONE', JOB, SHARD, flush=True)
 asyncio.run(main())
