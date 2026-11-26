@@ -24,4 +24,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
+          ARTICLES_ONLY: '1'
+          OUT_NAME: 'articles'
+          DEST: 'datasets/openalex-oa-gap/articles'
         run: python scripts/oagap.py

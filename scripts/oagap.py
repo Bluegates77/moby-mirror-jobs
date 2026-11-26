@@ -4,7 +4,7 @@ Env: SHARD, SHARDS, HF_TOKEN (read and write), DRY=1 (no upload), LIMIT=n (only 
 import os, re, json, gzip, time, shutil, collections, multiprocessing as mp
 from huggingface_hub import HfApi, hf_hub_download
 R = 'Middle-child/moby-public-assets'; SHARD = int(os.environ['SHARD']); SHARDS = int(os.environ['SHARDS']); DRY = os.environ.get('DRY') == '1'
-LIMIT = int(os.environ.get('LIMIT', '0')); W = os.environ.get('RUNNER_TEMP', '/tmp') + '/oagap%d' % SHARD
+LIMIT = int(os.environ.get('LIMIT', '0')); ARTICLES_ONLY = os.environ.get('ARTICLES_ONLY') == '1'; OUT = os.environ.get('OUT_NAME', 'candidates'); DEST = os.environ.get('DEST', 'datasets/openalex-oa-gap'); W = os.environ.get('RUNNER_TEMP', '/tmp') + '/oagap%d' % SHARD
 COMM = {'cc-by', 'cc-by-sa', 'cc-by-nd', 'cc0', 'public-domain'}
 RX = re.compile(r'"license":"[^"]')
 def klass(lic):
@@ -36,9 +36,10 @@ def one(path):
                 c[('cand_' if not in_pmc else 'inpmc_') + k] += 1
                 s = b.get('source') or {}
                 host = s.get('host_organization_name') or s.get('display_name') or 'unknown'
-                if not in_pmc:
+                if not in_pmc and (ARTICLES_ONLY is False or r.get('type') in ('article', 'review', 'preprint')):
                     hosts[(k, host, s.get('type'))] += 1
-                    out.append(dict(id=r.get('id'), doi=r.get('doi'), year=r.get('publication_year'), type=r.get('type'), licence=lic, oa_status=oa.get('oa_status'), pdf=b.get('pdf_url'), landing=b.get('landing_page_url'), host=host, source=s.get('display_name'), source_type=s.get('type'), version=b.get('version')))
+                    fa = ((((r.get('authorships') or [{}])[0] or {}).get('author') or {}).get('display_name'))
+                    out.append(dict(id=r.get('id'), doi=r.get('doi'), year=r.get('publication_year'), type=r.get('type'), licence=lic, oa_status=oa.get('oa_status'), pdf=b.get('pdf_url'), landing=b.get('landing_page_url'), host=host, source=s.get('display_name'), source_type=s.get('type'), version=b.get('version'), title=(r.get('title') or r.get('display_name') or '')[:220], first_author=fa))
     os.remove(local)
     return path, c, hosts, out, time.time() - t0
 if __name__ == '__main__':
@@ -48,7 +49,7 @@ if __name__ == '__main__':
     if LIMIT: mine = mine[:LIMIT]
     print('works files total', len(files), 'this shard', len(mine), flush=True)
     os.makedirs(W, exist_ok=True); tot = collections.Counter(); hosts = collections.Counter(); n = 0
-    cand = gzip.open(W + '/candidates_shard%02d.jsonl.gz' % SHARD, 'wt', encoding='utf8')
+    cand = gzip.open(W + '/%s_shard%02d.jsonl.gz' % (OUT, SHARD), 'wt', encoding='utf8')
     with mp.Pool(3) as pool:
         for path, c, h, out, dt in pool.imap_unordered(one, mine):
             tot.update(c); hosts.update(h); n += 1
@@ -56,11 +57,11 @@ if __name__ == '__main__':
             print('%d/%d %s %.0fs health=%d cand=%d' % (n, len(mine), path.split('/')[-2], dt, c['health'], c['cand_cc-commercial'] + c['cand_cc-noncommercial']), flush=True)
     cand.close()
     top = [dict(class_=k[0], host=k[1], source_type=k[2], works=v) for k, v in hosts.most_common(5000)]
-    json.dump(dict(shard=SHARD, shards=SHARDS, files=len(mine), counts=dict(tot), hosts_top5000=top, hosts_total=len(hosts), date=time.strftime('%Y-%m-%d')), open(W + '/summary_shard%02d.json' % SHARD, 'w'))
+    json.dump(dict(shard=SHARD, shards=SHARDS, files=len(mine), counts=dict(tot), hosts_top5000=top, hosts_total=len(hosts), date=time.strftime('%Y-%m-%d')), open(W + '/summary_%s_shard%02d.json' % (OUT, SHARD), 'w'))
     print('SHARD DONE', dict(tot), flush=True)
     if not DRY:
         stage = W + '/up'; os.makedirs(stage, exist_ok=True)
-        for f in ('candidates_shard%02d.jsonl.gz' % SHARD, 'summary_shard%02d.json' % SHARD): shutil.copy(W + '/' + f, stage + '/' + f)
+        for f in ('%s_shard%02d.jsonl.gz' % (OUT, SHARD), 'summary_%s_shard%02d.json' % (OUT, SHARD)): shutil.copy(W + '/' + f, stage + '/' + f)
         for t in range(8):
-            try: a.upload_folder(repo_id=R, repo_type='dataset', folder_path=stage, path_in_repo='datasets/openalex-oa-gap', commit_message='OpenAlex open-access gap analysis, shard %d of %d' % (SHARD, SHARDS)); print('uploaded', flush=True); break
+            try: a.upload_folder(repo_id=R, repo_type='dataset', folder_path=stage, path_in_repo=DEST, commit_message='OpenAlex open-access gap, articles with titles (%s), shard %d of %d' % (OUT, SHARD, SHARDS)); print('uploaded', flush=True); break
             except Exception as e: print('upload retry', str(e)[:100], flush=True); time.sleep(60 + 30 * SHARD)
