@@ -1,0 +1,27 @@
+name: OpenAlex open-access gap analysis (20 shards)
+# Reads our public Hugging Face copy of the OpenAlex works snapshot and lists health-sciences open-access works that are not in PubMed Central. Started by hand. The write token is the repository secret HF_TOKEN; it is never printed.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub
+      - name: Scan this shard
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: '20'
+        run: python scripts/oagap.py
