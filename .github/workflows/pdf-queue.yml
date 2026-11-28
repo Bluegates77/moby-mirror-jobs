@@ -1,0 +1,150 @@
+name: Open-access papers queue (commercial-use, one host after another)
+# Runs pdf-papers.yml for one host at a time (20 shards each); the next starts when the last ends, even if it failed. Then 'rest' takes every other host (not Elsevier). Re-run the queue to resume: finished chunks are skipped. Started by hand.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  j0:
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'european organization for nuclear'
+      classes: comm
+      dest: datasets/oa-papers-commercial/zenodo-cern
+  j1:
+    needs: j0
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'multidisciplinary digital'
+      classes: comm
+      dest: datasets/oa-papers-commercial/mdpi
+  j2:
+    needs: j1
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'scientific research publishing'
+      classes: comm
+      dest: datasets/oa-papers-commercial/scirp
+  j3:
+    needs: j2
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'springer'
+      classes: comm
+      dest: datasets/oa-papers-commercial/springer
+  j4:
+    needs: j3
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'wiley'
+      classes: comm
+      dest: datasets/oa-papers-commercial/wiley
+  j5:
+    needs: j4
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'hindawi'
+      classes: comm
+      dest: datasets/oa-papers-commercial/hindawi
+  j6:
+    needs: j5
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'science publishing group'
+      classes: comm
+      dest: datasets/oa-papers-commercial/science-publishing-group
+  j7:
+    needs: j6
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'norwegian medical'
+      classes: comm
+      dest: datasets/oa-papers-commercial/norwegian-medical-association
+  j8:
+    needs: j7
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'taylor'
+      classes: comm
+      dest: datasets/oa-papers-commercial/taylor-francis
+  j9:
+    needs: j8
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'preprints.org'
+      classes: comm
+      dest: datasets/oa-papers-commercial/preprints-org
+  j10:
+    needs: j9
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'biomed central'
+      classes: comm
+      dest: datasets/oa-papers-commercial/biomed-central
+  j11:
+    needs: j10
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'oxford university press'
+      classes: comm
+      dest: datasets/oa-papers-commercial/oxford-university-press
+  j12:
+    needs: j11
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'medrxiv'
+      classes: comm
+      dest: datasets/oa-papers-commercial/medrxiv
+  j13:
+    needs: j12
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'american society of neuroradiology'
+      classes: comm
+      dest: datasets/oa-papers-commercial/asnr
+  j14:
+    needs: j13
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: 'cambridge university press'
+      classes: comm
+      dest: datasets/oa-papers-commercial/cambridge-university-press
+  jrest:
+    needs: j14
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/pdf-papers.yml
+    secrets: inherit
+    with:
+      host: ''
+      classes: comm
+      dest: datasets/oa-papers-commercial/other-hosts
+      exclude: 'european organization for nuclear,multidisciplinary digital,scientific research publishing,springer,wiley,hindawi,science publishing group,norwegian medical,taylor,preprints.org,biomed central,oxford university press,medrxiv,american society of neuroradiology,cambridge university press,research square'

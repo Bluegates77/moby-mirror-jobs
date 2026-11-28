@@ -9,7 +9,7 @@ import os, json, gzip, io, tarfile, hashlib, time, shutil, datetime, asyncio, re
 import aiohttp
 from huggingface_hub import HfApi, hf_hub_download
 SHARD = int(os.environ['SHARD']); SHARDS = int(os.environ['SHARDS']); CONC = int(os.environ.get('CONC', '64')); PERHOST = int(os.environ.get('PERHOST', '6'))
-CLASSES = os.environ.get('CLASSES', 'comm'); HOST = os.environ.get('HOST', '').lower(); CH = int(os.environ.get('CH', '400')); MAXMB = int(os.environ.get('MAXMB', '80'))
+CLASSES = os.environ.get('CLASSES', 'comm'); HOST = os.environ.get('HOST', '').lower(); EXCLUDE = [x.strip().lower() for x in os.environ.get('EXCLUDE', '').split(',') if x.strip()]; CH = int(os.environ.get('CH', '400')); MAXMB = int(os.environ.get('MAXMB', '80'))
 LIMIT = int(os.environ.get('LIMIT_CHUNKS', '0')); DRY = os.environ.get('DRY') == '1'
 TARGET = float(os.environ.get('TARGET_PER_HOUR', '100')); MIN_GAP = SHARDS * 3600.0 / TARGET
 R = 'Middle-child/moby-public-assets'; DEST = os.environ['DEST']
@@ -23,6 +23,7 @@ for l in gzip.open(lp, 'rt'):
     h = ((r.get('host') or '') + ' ' + r['pdf']).lower()
     if 'elsevier' in h or 'sciencedirect' in h: continue
     if HOST and HOST not in (r.get('host') or '').lower(): continue
+    if any(x in (r.get('host') or '').lower() for x in EXCLUDE): continue
     rows.append(r)
 rows.sort(key=lambda r: r['id']); nch = -(-len(rows) // CH)
 print('selected', len(rows), 'chunks', nch, 'shard', SHARD, '/', SHARDS, flush=True)

@@ -1,8 +1,17 @@
 name: Open-access papers (direct PDF, 20 shards)
 # Copies papers with a Creative Commons licence from the deduplicated list of papers we do not hold into our public Hugging Face copy. Started by hand with the host, the class (comm or nc) and the destination folder. Elsevier is always skipped. The write token is the repository secret HF_TOKEN.
 on:
+  workflow_call:
+    inputs:
+      host: {type: string, default: ''}
+      classes: {type: string, default: 'comm'}
+      dest: {type: string, required: true}
+      exclude: {type: string, default: ''}
   workflow_dispatch:
     inputs:
+      exclude:
+        description: 'Comma list of host parts to leave out'
+        default: ''
       host:
         description: 'Part of the host name (empty = all hosts), e.g. research square'
         default: 'research square'
@@ -37,4 +46,5 @@ jobs:
           HOST: ${{ inputs.host }}
           CLASSES: ${{ inputs.classes }}
           DEST: ${{ inputs.dest }}
+          EXCLUDE: ${{ inputs.exclude }}
         run: python scripts/pdf_shard.py
