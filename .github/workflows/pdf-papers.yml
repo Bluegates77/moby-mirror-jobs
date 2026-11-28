@@ -1,30 +1,40 @@
 name: Open-access papers (direct PDF, 20 shards)
-# Copies papers with a Creative Commons licence from the deduplicated list of papers we do not hold into our public Hugging Face copy. Started by hand with the host, the class (comm or nc) and the destination folder. Elsevier is always skipped. The write token is the repository secret HF_TOKEN.
+# Copies papers with a Creative Commons licence from the deduplicated list of papers we do not hold into our public Hugging Face copy. Started by hand with a queue; when the 20 shards end it starts the next host by itself (a new run each time, so no run nears GitHub's 6-hour limit). Elsevier is always skipped. The write token is the repository secret HF_TOKEN.
+# queue = "host|folder;host|folder;..." (host may be empty = every host not in exclude). Only the first item runs; the rest is passed on.
 on:
-  workflow_call:
-    inputs:
-      host: {type: string, default: ''}
-      classes: {type: string, default: 'comm'}
-      dest: {type: string, required: true}
-      exclude: {type: string, default: ''}
   workflow_dispatch:
     inputs:
-      exclude:
-        description: 'Comma list of host parts to leave out'
-        default: ''
-      host:
-        description: 'Part of the host name (empty = all hosts), e.g. research square'
-        default: 'research square'
+      queue:
+        description: 'host|folder;host|folder;...'
+        default: 'research square|research-square'
       classes:
         description: 'comm (commercial-use licences) or nc (non-commercial)'
         default: 'comm'
-      dest:
+      exclude:
+        description: 'Comma list of host parts to leave out'
+        default: ''
+      base:
         description: 'Folder in the Hugging Face repo'
-        default: 'datasets/oa-papers-commercial/research-square'
+        default: 'datasets/oa-papers-commercial'
 permissions:
   contents: read
+  actions: write
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      host: ${{ steps.p.outputs.host }}
+      folder: ${{ steps.p.outputs.folder }}
+      rest: ${{ steps.p.outputs.rest }}
+    steps:
+      - id: p
+        env:
+          Q: ${{ inputs.queue }}
+        run: |
+          first="${Q%%;*}"; rest=""; case "$Q" in *";"*) rest="${Q#*;}";; esac
+          echo "host=${first%%|*}" >> "$GITHUB_OUTPUT"; echo "folder=${first#*|}" >> "$GITHUB_OUTPUT"; echo "rest=$rest" >> "$GITHUB_OUTPUT"
   shard:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 345
     strategy:
@@ -43,8 +53,17 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           SHARD: ${{ matrix.shard }}
           SHARDS: '20'
-          HOST: ${{ inputs.host }}
+          HOST: ${{ needs.plan.outputs.host }}
           CLASSES: ${{ inputs.classes }}
-          DEST: ${{ inputs.dest }}
+          DEST: ${{ inputs.base }}/${{ needs.plan.outputs.folder }}
           EXCLUDE: ${{ inputs.exclude }}
         run: python scripts/pdf_shard.py
+  next:
+    needs: [plan, shard]
+    if: ${{ always() && needs.plan.outputs.rest != '' && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Start the next host
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pdf-papers.yml --repo "$GITHUB_REPOSITORY" --ref main -f queue="${{ needs.plan.outputs.rest }}" -f classes="${{ inputs.classes }}" -f exclude="${{ inputs.exclude }}" -f base="${{ inputs.base }}"
