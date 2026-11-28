@@ -28,26 +28,45 @@ for l in gzip.open(lp, 'rt'):
     rows.append(r)
 rows.sort(key=lambda r: r['id']); nch = -(-len(rows) // CH)
 print('selected', len(rows), 'chunks', nch, 'shard', SHARD, '/', SHARDS, 'workers', WORKERS, 'conn', CONC, flush=True)
+SAMPLES = {}
 S = dict(chunks=0, seen=0, ok=0, bytes=0, skipped={}, inflight=0, last_done=time.time(), last_upload=None, uploads=0, start=time.time())
 hostsem = {}
+hostpause = {}
+def retry_after(resp, i):
+    """Seconds the site asked us to wait (Retry-After as seconds or a date); without it, 5, 10, 20, 40 s. Never more than 300 s."""
+    v = resp.headers.get('Retry-After')
+    if v:
+        try: return min(300.0, max(1.0, float(v)))
+        except ValueError:
+            try:
+                from email.utils import parsedate_to_datetime
+                return min(300.0, max(1.0, (parsedate_to_datetime(v) - datetime.datetime.now(datetime.timezone.utc)).total_seconds()))
+            except Exception: pass
+    return 5.0 * 2 ** i
 async def fetch(session, sem, r):
-    u = r['pdf']; hs = hostsem.setdefault(re.sub(r'^https?://([^/]+).*', r'\1', u), asyncio.Semaphore(PERHOST))
+    u = r['pdf']; host = re.sub(r'^https?://([^/]+).*', r'\1', u); hs = hostsem.setdefault(host, asyncio.Semaphore(PERHOST))
     why = 'failed'
-    for i in range(3):
+    for i in range(5):
+        wait = hostpause.get(host, 0) - time.time()
+        if wait > 0: await asyncio.sleep(wait)
         try:
             async with sem, hs:
                 S['inflight'] += 1
                 try:
                     async with session.get(u, allow_redirects=True) as resp:
                         if resp.status in (403, 404, 410, 451): return None, 'http %d' % resp.status
-                        if resp.status != 200: why = 'http %d' % resp.status; raise Exception(why)
+                        if resp.status in (202, 429, 502, 503, 504):
+                            d = retry_after(resp, i); hostpause[host] = max(hostpause.get(host, 0), time.time() + d); why = 'http %d' % resp.status; S['waits'] = S.get('waits', 0) + 1; continue
+                        if resp.status != 200: why = 'http %d' % resp.status; await asyncio.sleep(2 + 2 * i); continue
                         if resp.content_length and resp.content_length > MAXMB << 20: return None, 'too big'
                         b = await resp.read()
                         if len(b) > MAXMB << 20: return None, 'too big'
-                        if not b.startswith(b'%PDF'): return None, 'not a pdf'
+                        if not b.startswith(b'%PDF'):
+                            k = (str(resp.url)[:70] + ' | ' + resp.headers.get('content-type', '?')[:30] + ' | ' + re.sub(r'\s+', ' ', b[:160].decode('utf-8', 'replace'))); SAMPLES[k] = SAMPLES.get(k, 0) + 1
+                            return None, 'not a pdf'
                         return b, None
                 finally: S['inflight'] -= 1
-        except Exception: await asyncio.sleep(1 + 2 * i)
+        except Exception: why = 'failed'; await asyncio.sleep(1 + 2 * i)
     return None, why
 async def process(session, sem, ci):
     rs = rows[ci * CH:(ci + 1) * CH]; d = ROOT + '/work/%05d' % ci; os.makedirs(d + '/pdf', exist_ok=True); os.makedirs(d + '/metadata', exist_ok=True)
@@ -57,10 +76,14 @@ async def process(session, sem, ci):
             if b is None: skipped[why] = skipped.get(why, 0) + 1; continue
             name = r['id'].rsplit('/', 1)[-1] + '.pdf'; ti = tarfile.TarInfo(name); ti.size = len(b); ti.mtime = 0; tf.addfile(ti, io.BytesIO(b)); nb += len(b)
             meta.append(dict(openalex=r['id'], doi=r.get('doi'), title=r.get('title'), year=r.get('year'), licence=r['licence'], licence_source='OpenAlex best_oa_location.license', pdf_url=r['pdf'], landing=r.get('landing'), host=r.get('host'), retrieved=T, sha256=hashlib.sha256(b).hexdigest(), bytes=len(b), archive='pdf/chunk_%05d.tar' % ci, member=name))
-    with gzip.open(d + '/metadata/chunk_%05d.jsonl.gz' % ci, 'wt') as f:
-        for m in meta: f.write(json.dumps(m) + '\n')
-    info = dict(chunk=ci, seen=len(rs), copied=len(meta), bytes=nb, skipped=skipped, date=T)
-    with open(d + '/metadata/chunk_%05d.summary.json' % ci, 'w') as f: json.dump(info, f)
+    bad = len(rs) >= 50 and len(meta) < 0.2 * len(rs)
+    if bad:
+        os.remove(d + '/pdf/chunk_%05d.tar' % ci); os.makedirs(d + '/failed_chunks', exist_ok=True)
+    else:
+        with gzip.open(d + '/metadata/chunk_%05d.jsonl.gz' % ci, 'wt') as f:
+            for m in meta: f.write(json.dumps(m) + '\n')
+    info = dict(bad=bad, chunk=ci, seen=len(rs), copied=len(meta), bytes=nb, skipped=skipped, date=T)
+    with open(d + ('/failed_chunks' if bad else '/metadata') + '/chunk_%05d.summary.json' % ci, 'w') as f: json.dump(info, f)
     S['chunks'] += 1; S['seen'] += len(rs); S['ok'] += len(meta); S['bytes'] += nb; S['last_done'] = time.time()
     for k, v in skipped.items(): S['skipped'][k] = S['skipped'].get(k, 0) + v
     return ci, d, info
@@ -72,6 +95,7 @@ async def heartbeat(stop):
         try: await asyncio.wait_for(stop.wait(), 180)
         except asyncio.TimeoutError: pass
         print(line(), flush=True)
+        for k, v in sorted(SAMPLES.items(), key=lambda x: -x[1])[:3]: print('   non-PDF answer x%d: %s' % (v, k), flush=True)
         if time.time() - S['last_done'] > 1200 and not stop.is_set(): print('WATCHDOG: no chunk finished for 20 minutes', flush=True); os._exit(3)
 def flush(stage, cis):
     pd = stage + '/_progress'; os.makedirs(pd, exist_ok=True)
@@ -101,7 +125,8 @@ async def main():
             while work:
                 if size_of(ROOT) > 9e9: await asyncio.sleep(10); continue
                 ci = work.pop(0); ci, d, info = await process(session, sem, ci)
-                for sub in ('pdf', 'metadata'):
+                for sub in ('pdf', 'metadata', 'failed_chunks'):
+                    if not os.path.isdir(d + '/' + sub): continue
                     for f in os.listdir(d + '/' + sub): os.makedirs(st['dir'] + '/' + sub, exist_ok=True); shutil.move(d + '/' + sub + '/' + f, st['dir'] + '/' + sub + '/' + f)
                 shutil.rmtree(d, ignore_errors=True); st['pending'].append(ci)
                 print('chunk', ci, info['copied'], 'of', info['seen'], '%.0f MB' % (info['bytes'] / 1e6), info['skipped'], flush=True)
