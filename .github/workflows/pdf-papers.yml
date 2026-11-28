@@ -1,0 +1,40 @@
+name: Open-access papers (direct PDF, 20 shards)
+# Copies papers with a Creative Commons licence from the deduplicated list of papers we do not hold into our public Hugging Face copy. Started by hand with the host, the class (comm or nc) and the destination folder. Elsevier is always skipped. The write token is the repository secret HF_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      host:
+        description: 'Part of the host name (empty = all hosts), e.g. research square'
+        default: 'research square'
+      classes:
+        description: 'comm (commercial-use licences) or nc (non-commercial)'
+        default: 'comm'
+      dest:
+        description: 'Folder in the Hugging Face repo'
+        default: 'datasets/oa-papers-commercial/research-square'
+permissions:
+  contents: read
+jobs:
+  shard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub aiohttp
+      - name: Copy this shard
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: '20'
+          HOST: ${{ inputs.host }}
+          CLASSES: ${{ inputs.classes }}
+          DEST: ${{ inputs.dest }}
+        run: python scripts/pdf_shard.py
