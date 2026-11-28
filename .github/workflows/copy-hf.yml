@@ -1,0 +1,29 @@
+name: Copy a public Hugging Face dataset (verified)
+# Copies SRC into our Hugging Face repo under DEST and checks every file's SHA-256 after download and after upload. Started by hand. The write token is the repository secret HF_TOKEN.
+on:
+  workflow_dispatch:
+    inputs:
+      src:
+        description: 'Source dataset owner/name'
+        default: 'SBU-BBL/Elsevier-OpenAccess'
+      dest:
+        description: 'Folder in our repo'
+        default: 'datasets/elsevier-third-party/SBU-BBL_Elsevier-OpenAccess'
+permissions:
+  contents: read
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -q huggingface_hub
+      - name: Copy and verify
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          SRC: ${{ inputs.src }}
+          DEST: ${{ inputs.dest }}
+        run: python scripts/copy_hf.py
