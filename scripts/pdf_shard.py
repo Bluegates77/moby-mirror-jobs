@@ -32,6 +32,10 @@ SAMPLES = {}
 S = dict(chunks=0, seen=0, ok=0, bytes=0, skipped={}, inflight=0, last_done=time.time(), last_upload=None, uploads=0, start=time.time())
 hostsem = {}
 hostpause = {}
+def direct(u):
+    """Springer, SpringerOpen and BioMed Central list tracking addresses (/track/pdf/<doi> and /counter/pdf/<doi>); from GitHub's machines they answer with a web page, so go straight to the file address they redirect to."""
+    m = re.match(r'https?://[^/]+/(?:track|counter)/pdf/(10\.\S+?)(?:\?.*)?$', u)
+    return 'https://link.springer.com/content/pdf/%s.pdf' % m.group(1) if m else u
 def retry_after(resp, i):
     """Seconds the site asked us to wait (Retry-After as seconds or a date); without it, 5, 10, 20, 40 s. Never more than 300 s."""
     v = resp.headers.get('Retry-After')
@@ -44,7 +48,7 @@ def retry_after(resp, i):
             except Exception: pass
     return 5.0 * 2 ** i
 async def fetch(session, sem, r):
-    u = r['pdf']; host = re.sub(r'^https?://([^/]+).*', r'\1', u); hs = hostsem.setdefault(host, asyncio.Semaphore(PERHOST))
+    u = direct(r['pdf']); host = re.sub(r'^https?://([^/]+).*', r'\1', u); hs = hostsem.setdefault(host, asyncio.Semaphore(PERHOST))
     why = 'failed'
     for i in range(5):
         wait = hostpause.get(host, 0) - time.time()
